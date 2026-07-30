@@ -4,6 +4,11 @@ import type { ChordQuality, FingerPattern, GestureCandidate, HandAnalysis, Hande
 
 const DEFAULT_TILT_THRESHOLD = 12
 
+const thumbThresholds = {
+  activate: { straightAngle: 145, gapRatio: 0.78, outwardRatio: 0.38 },
+  hold: { straightAngle: 136, gapRatio: 0.66, outwardRatio: 0.28 },
+} as const
+
 const fingerJoints = [
   [5, 6, 8],
   [9, 10, 12],
@@ -13,6 +18,10 @@ const fingerJoints = [
 
 function distance(a: NormalizedLandmark, b: NormalizedLandmark): number {
   return Math.hypot(a.x - b.x, a.y - b.y, (a.z ?? 0) - (b.z ?? 0))
+}
+
+function distance2d(a: NormalizedLandmark, b: NormalizedLandmark): number {
+  return Math.hypot(a.x - b.x, a.y - b.y)
 }
 
 function angle(a: NormalizedLandmark, vertex: NormalizedLandmark, c: NormalizedLandmark): number {
@@ -30,10 +39,22 @@ export function detectFingerStates(
   previous: FingerPattern = [false, false, false, false, false],
 ): FingerPattern {
   const wrist = landmarks[0]
-  const palmWidth = distance(landmarks[5], landmarks[17])
-  const thumbStraight = angle(landmarks[2], landmarks[3], landmarks[4]) > (previous[0] ? 136 : 145)
-  const thumbAwayFromPalm = distance(landmarks[4], landmarks[5]) > palmWidth * (previous[0] ? 0.58 : 0.66)
-  const thumbExtended = thumbStraight && thumbAwayFromPalm
+  const indexMcp = landmarks[5]
+  const pinkyMcp = landmarks[17]
+  const thumbTip = landmarks[4]
+  const palmWidth = distance2d(indexMcp, pinkyMcp)
+  const thumbThreshold = previous[0] ? thumbThresholds.hold : thumbThresholds.activate
+  const thumbGapRatio = palmWidth > 0 ? distance2d(thumbTip, indexMcp) / palmWidth : 0
+  // Project onto the index-facing side of the palm. This is rotation-invariant and
+  // works for either hand because indexMcp - pinkyMcp always points toward the thumb.
+  const thumbOutwardRatio = palmWidth > 0
+    ? ((thumbTip.x - indexMcp.x) * (indexMcp.x - pinkyMcp.x)
+      + (thumbTip.y - indexMcp.y) * (indexMcp.y - pinkyMcp.y)) / (palmWidth * palmWidth)
+    : 0
+  const thumbStraight = angle(landmarks[2], landmarks[3], thumbTip) > thumbThreshold.straightAngle
+  const thumbExtended = thumbStraight
+    && thumbGapRatio > thumbThreshold.gapRatio
+    && thumbOutwardRatio > thumbThreshold.outwardRatio
 
   const fingers = fingerJoints.map(([mcp, pip, tip], index) => {
     const wasExtended = previous[index + 1]
