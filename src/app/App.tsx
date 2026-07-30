@@ -1,6 +1,7 @@
 import { lazy, Suspense } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 import { AppHeader } from '../components/AppHeader'
+import { RouteSeo } from '../features/seo/SeoHead'
 import { HomePage } from '../pages/HomePage'
 
 const LearnPage = lazy(() => import('../pages/LearnPage').then((module) => ({ default: module.LearnPage })))
@@ -11,6 +12,7 @@ const SongTutorialPage = lazy(() => import('../pages/SongTutorialPage').then((mo
 export default function App() {
   return (
     <div className="app-shell">
+      <RouteSeo />
       <AppHeader />
       <main>
         <Suspense fallback={<div className="route-loader"><i /> Loading instrument</div>}>

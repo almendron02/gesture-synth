@@ -6,6 +6,12 @@
   NODE_VERSION = "22"
 
 [[redirects]]
+  from = "https://gesture-synth.netlify.app/*"
+  to = "https://synth.formawebsite.com/:splat"
+  status = 301
+  force = true
+
+[[redirects]]
   from = "/*"
   to = "/index.html"
   status = 200
@@ -27,3 +33,13 @@
   for = "/wasm/*"
   [headers.values]
     Cache-Control = "public, max-age=604800"
+
+[[headers]]
+  for = "/sitemap.xml"
+  [headers.values]
+    Cache-Control = "public, max-age=3600"
+
+[[headers]]
+  for = "/robots.txt"
+  [headers.values]
+    Cache-Control = "public, max-age=3600"

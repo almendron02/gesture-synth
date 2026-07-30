@@ -1,0 +1,17 @@
+{
+  "name": "Gesture Synth",
+  "short_name": "Gesture Synth",
+  "description": "Play expressive chords in your browser with two-hand gestures and a webcam.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0c0d0c",
+  "theme_color": "#0c0d0c",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
