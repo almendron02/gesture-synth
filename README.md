@@ -4,6 +4,8 @@
 
 Gesture Synth turns live webcam hand signs into chords. The left hand selects the harmony and its major or minor quality; the right hand controls voicing, octave, volume, and brightness. Everything runs locally in the browser—camera frames are never uploaded or stored.
 
+[Open Gesture Synth](https://synth.formawebsite.com) · [Gesture guide](docs/gesture-reference.md) · [Architecture](docs/architecture.md)
+
 ## Highlights
 
 - Two-hand tracking with 21 MediaPipe landmarks per hand
@@ -98,10 +100,7 @@ GitHub Actions runs the same checks on pushes and pull requests.
 
 The repository includes a production-ready [`netlify.toml`](netlify.toml).
 
-1. Import the GitHub repository into Netlify.
-2. Set `main` as the production branch.
-3. Netlify runs `npm run build` and publishes `dist`.
-4. SPA redirects, security headers, and cache rules are applied automatically.
+The production site is available at [synth.formawebsite.com](https://synth.formawebsite.com). Netlify watches `main`, runs `npm run build`, publishes `dist`, and applies the SPA redirects, security headers, and cache rules in `netlify.toml`.
 
 ## Project status
 
