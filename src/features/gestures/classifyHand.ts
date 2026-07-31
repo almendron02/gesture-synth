@@ -4,7 +4,18 @@ import type { ChordQuality, FingerPattern, GestureCandidate, HandAnalysis, Hande
 
 const DEFAULT_TILT_THRESHOLD = 12
 
-const thumbThresholds = {
+export interface ThumbDetectionThresholds {
+  activate: { straightAngle: number; gapRatio: number; outwardRatio: number }
+  hold: { straightAngle: number; gapRatio: number; outwardRatio: number }
+}
+
+export interface ThumbPoseMeasurements {
+  straightAngle: number
+  gapRatio: number
+  outwardRatio: number
+}
+
+export const DEFAULT_THUMB_THRESHOLDS: ThumbDetectionThresholds = {
   activate: { straightAngle: 145, gapRatio: 0.78, outwardRatio: 0.38 },
   hold: { straightAngle: 136, gapRatio: 0.66, outwardRatio: 0.28 },
 } as const
@@ -34,27 +45,35 @@ function angle(a: NormalizedLandmark, vertex: NormalizedLandmark, c: NormalizedL
   return Math.acos(Math.max(-1, Math.min(1, dot / (firstLength * secondLength)))) * 180 / Math.PI
 }
 
-export function detectFingerStates(
-  landmarks: NormalizedLandmark[],
-  previous: FingerPattern = [false, false, false, false, false],
-): FingerPattern {
-  const wrist = landmarks[0]
+export function measureThumbPose(landmarks: NormalizedLandmark[]): ThumbPoseMeasurements {
   const indexMcp = landmarks[5]
   const pinkyMcp = landmarks[17]
   const thumbTip = landmarks[4]
   const palmWidth = distance2d(indexMcp, pinkyMcp)
-  const thumbThreshold = previous[0] ? thumbThresholds.hold : thumbThresholds.activate
-  const thumbGapRatio = palmWidth > 0 ? distance2d(thumbTip, indexMcp) / palmWidth : 0
-  // Project onto the index-facing side of the palm. This is rotation-invariant and
-  // works for either hand because indexMcp - pinkyMcp always points toward the thumb.
-  const thumbOutwardRatio = palmWidth > 0
+  const gapRatio = palmWidth > 0 ? distance2d(thumbTip, indexMcp) / palmWidth : 0
+  // Index MCP minus pinky MCP always points toward the thumb side of either palm.
+  const outwardRatio = palmWidth > 0
     ? ((thumbTip.x - indexMcp.x) * (indexMcp.x - pinkyMcp.x)
       + (thumbTip.y - indexMcp.y) * (indexMcp.y - pinkyMcp.y)) / (palmWidth * palmWidth)
     : 0
-  const thumbStraight = angle(landmarks[2], landmarks[3], thumbTip) > thumbThreshold.straightAngle
-  const thumbExtended = thumbStraight
-    && thumbGapRatio > thumbThreshold.gapRatio
-    && thumbOutwardRatio > thumbThreshold.outwardRatio
+  return {
+    straightAngle: angle(landmarks[2], landmarks[3], thumbTip),
+    gapRatio,
+    outwardRatio,
+  }
+}
+
+export function detectFingerStates(
+  landmarks: NormalizedLandmark[],
+  previous: FingerPattern = [false, false, false, false, false],
+  thresholds: ThumbDetectionThresholds = DEFAULT_THUMB_THRESHOLDS,
+): FingerPattern {
+  const wrist = landmarks[0]
+  const thumbThreshold = previous[0] ? thresholds.hold : thresholds.activate
+  const thumbPose = measureThumbPose(landmarks)
+  const thumbExtended = thumbPose.straightAngle > thumbThreshold.straightAngle
+    && thumbPose.gapRatio > thumbThreshold.gapRatio
+    && thumbPose.outwardRatio > thumbThreshold.outwardRatio
 
   const fingers = fingerJoints.map(([mcp, pip, tip], index) => {
     const wasExtended = previous[index + 1]
@@ -94,8 +113,9 @@ export function analyzeHand(
   tiltThreshold = DEFAULT_TILT_THRESHOLD,
   tiltOffset = 0,
   previousFingers?: FingerPattern,
+  thumbThresholds: ThumbDetectionThresholds = DEFAULT_THUMB_THRESHOLDS,
 ): HandAnalysis {
-  const fingers = detectFingerStates(landmarks, previousFingers)
+  const fingers = detectFingerStates(landmarks, previousFingers, thumbThresholds)
   const pattern = patternToString(fingers)
   const degree = degreeForPattern(fingers)
   const rollAngle = normalizedAngle(calculateDisplayedRoll(landmarks) - tiltOffset)

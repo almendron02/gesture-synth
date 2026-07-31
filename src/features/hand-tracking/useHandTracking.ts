@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type RefObject } from 'react'
 import type { HandLandmarker } from '@mediapipe/tasks-vision'
-import { analyzeHand } from '../gestures/classifyHand'
+import { analyzeHand, type ThumbDetectionThresholds } from '../gestures/classifyHand'
 import { classifyRightHand } from '../gestures/classifyRightHand'
 import { EMPTY_HANDS_FRAME, type FingerPattern, type HandsFrameAnalysis, type Handedness } from '../gestures/gesture.types'
 import { createHandLandmarker } from './createHandLandmarker'
@@ -15,7 +15,8 @@ interface UseHandTrackingOptions {
   canvasRef: RefObject<HTMLCanvasElement | null>
   enabled: boolean
   tiltThreshold: number
-  tiltOffset: number
+  tiltOffsets: Record<Handedness, number>
+  thumbThresholds: Record<Handedness, ThumbDetectionThresholds>
   onAnalysis: (analysis: HandsFrameAnalysis, timestamp: number) => void
 }
 
@@ -23,15 +24,25 @@ function normalizeHandedness(value: string | undefined): Handedness {
   return value?.toLowerCase() === 'left' ? 'Left' : 'Right'
 }
 
-export function useHandTracking({ videoRef, canvasRef, enabled, tiltThreshold, tiltOffset, onAnalysis }: UseHandTrackingOptions) {
+export function useHandTracking({
+  videoRef,
+  canvasRef,
+  enabled,
+  tiltThreshold,
+  tiltOffsets,
+  thumbThresholds,
+  onAnalysis,
+}: UseHandTrackingOptions) {
   const callbackRef = useRef(onAnalysis)
   const tiltThresholdRef = useRef(tiltThreshold)
-  const tiltOffsetRef = useRef(tiltOffset)
+  const tiltOffsetsRef = useRef(tiltOffsets)
+  const thumbThresholdsRef = useRef(thumbThresholds)
   const [status, setStatus] = useState<TrackerStatus>('idle')
   const [error, setError] = useState<string | null>(null)
   callbackRef.current = onAnalysis
   tiltThresholdRef.current = tiltThreshold
-  tiltOffsetRef.current = tiltOffset
+  tiltOffsetsRef.current = tiltOffsets
+  thumbThresholdsRef.current = thumbThresholds
 
   useEffect(() => {
     if (!enabled) {
@@ -105,8 +116,9 @@ export function useHandTracking({ videoRef, canvasRef, enabled, tiltThreshold, t
                 handedness,
                 category?.score ?? 0,
                 tiltThresholdRef.current,
-                tiltOffsetRef.current,
+                tiltOffsetsRef.current[handedness],
                 previousFingers[handedness],
+                thumbThresholdsRef.current[handedness],
               )
               previousFingers[handedness] = analysis.fingers
               return analysis

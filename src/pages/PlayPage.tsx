@@ -1,7 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useCamera } from '../features/camera/useCamera'
+import {
+  CALIBRATION_SAMPLE_TARGET,
+  createCalibrationProfile,
+  estimateNeutralOffsets,
+  estimateThumbThresholds,
+  loadCalibrationProfile,
+  saveCalibrationProfile,
+  type CalibrationProfile,
+} from '../features/calibration/calibration'
 import { FingerDiagram } from '../features/gestures/FingerDiagram'
 import { GestureStabilizer } from '../features/gestures/GestureStabilizer'
+import { DEFAULT_THUMB_THRESHOLDS } from '../features/gestures/classifyHand'
 import {
   classifyRightHand,
   combinePerformanceGesture,
@@ -24,6 +34,13 @@ const fingerLabels = ['T', 'I', 'M', 'R', 'P']
 const LOST_GESTURE_HOLD_MS = 500
 const GESTURE_START_DELAY_MS = 60
 const GESTURE_CHANGE_DELAY_MS = 24
+const DEFAULT_TILT_OFFSETS = { Left: 0, Right: 0 } as const
+const DEFAULT_THUMB_SETTINGS = {
+  Left: DEFAULT_THUMB_THRESHOLDS,
+  Right: DEFAULT_THUMB_THRESHOLDS,
+} as const
+
+type CalibrationStage = 'idle' | 'neutral' | 'thumbs' | 'complete'
 
 const rightHandStudioGuides = [
   { key: 'root', fingers: '1 finger', label: 'Root', pattern: [false, true, false, false, false] },
@@ -57,11 +74,20 @@ export function PlayPage() {
   const lastHandCountRef = useRef(0)
   const volumeRef = useRef(0.42)
   const expressionRef = useRef(0.65)
+  const calibrationStageRef = useRef<CalibrationStage>('idle')
+  const calibrationFramesRef = useRef<HandsFrameAnalysis[]>([])
+  const pendingTiltOffsetsRef = useRef<CalibrationProfile['tiltOffsets'] | null>(null)
+  const lastCalibrationUiUpdateRef = useRef(0)
+  const calibrationDismissedRef = useRef(false)
   const [sessionStarted, setSessionStarted] = useState(false)
   const [frame, setFrame] = useState<HandsFrameAnalysis>(EMPTY_HANDS_FRAME)
   const [activeGesture, setActiveGesture] = useState<PerformanceGesture | null>(null)
   const [activeChord, setActiveChord] = useState<Chord | null>(null)
   const [audioError, setAudioError] = useState<string | null>(null)
+  const [calibrationProfile, setCalibrationProfile] = useState<CalibrationProfile | null>(loadCalibrationProfile)
+  const [calibrationStage, setCalibrationStage] = useState<CalibrationStage>('idle')
+  const [calibrationError, setCalibrationError] = useState<string | null>(null)
+  const [calibrationSampleCount, setCalibrationSampleCount] = useState(0)
   const [soundPreset, setSoundPreset] = useState<SoundPreset>(() => {
     const stored = window.localStorage.getItem('gesture-synth:sound-preset')
     return soundPresetDefinitions.some((preset) => preset.id === stored) ? stored as SoundPreset : 'original'
@@ -73,15 +99,38 @@ export function PlayPage() {
     const saved = Number(stored)
     return Number.isFinite(saved) && saved >= 0 && saved <= 100 ? saved : 78
   })
-  const [tiltOffset, setTiltOffset] = useState(0)
   const { status: cameraStatus, error: cameraError, start: startCamera, stop: stopCamera } = useCamera(videoRef)
 
   // Higher sensitivity means a smaller rotation is needed to leave the neutral zone.
   const tiltThreshold = useMemo(() => 2 + (100 - tiltSensitivity) * 0.12, [tiltSensitivity])
+  const tiltOffsets = calibrationProfile?.tiltOffsets ?? DEFAULT_TILT_OFFSETS
+  const thumbThresholds = calibrationProfile?.thumbThresholds ?? DEFAULT_THUMB_SETTINGS
 
   const handleAnalysis = useCallback((nextFrame: HandsFrameAnalysis, timestamp: number) => {
-    const performance = combinePerformanceGesture(nextFrame.left, nextFrame.right)
-    const stable = stabilizerRef.current.update(performance, timestamp)
+    const calibrationActive = calibrationStageRef.current !== 'idle'
+    if (calibrationStageRef.current === 'neutral' || calibrationStageRef.current === 'thumbs') {
+      if (nextFrame.left?.landmarks && nextFrame.right?.landmarks
+        && nextFrame.left.confidence >= 0.65 && nextFrame.right.confidence >= 0.65) {
+        calibrationFramesRef.current = [...calibrationFramesRef.current.slice(-23), nextFrame]
+      }
+      if (timestamp - lastCalibrationUiUpdateRef.current > 100) {
+        lastCalibrationUiUpdateRef.current = timestamp
+        setCalibrationSampleCount(Math.min(CALIBRATION_SAMPLE_TARGET, calibrationFramesRef.current.length))
+      }
+    }
+
+    if (calibrationActive) {
+      stabilizerRef.current.reset()
+      if (activeKeyRef.current !== null) {
+        activeKeyRef.current = null
+        synthRef.current.release()
+        setActiveGesture(null)
+        setActiveChord(null)
+      }
+    }
+
+    const performance = calibrationActive ? null : combinePerformanceGesture(nextFrame.left, nextFrame.right)
+    const stable = calibrationActive ? null : stabilizerRef.current.update(performance, timestamp)
     const nextKey = stable?.key ?? null
 
     const expression = rightHandExpression(nextFrame.right)
@@ -119,7 +168,8 @@ export function PlayPage() {
     canvasRef,
     enabled: sessionStarted && cameraStatus === 'ready',
     tiltThreshold,
-    tiltOffset,
+    tiltOffsets,
+    thumbThresholds,
     onAnalysis: handleAnalysis,
   })
 
@@ -140,11 +190,17 @@ export function PlayPage() {
     stabilizerRef.current.reset()
     activeKeyRef.current = null
     lastHandCountRef.current = 0
+    calibrationStageRef.current = 'idle'
+    calibrationFramesRef.current = []
+    calibrationDismissedRef.current = false
     stopCamera()
     setSessionStarted(false)
     setFrame(EMPTY_HANDS_FRAME)
     setActiveGesture(null)
     setActiveChord(null)
+    setCalibrationStage('idle')
+    setCalibrationError(null)
+    setCalibrationSampleCount(0)
   }, [stopCamera])
 
   useEffect(() => {
@@ -163,16 +219,81 @@ export function PlayPage() {
 
   useEffect(() => () => synthRef.current.dispose(), [])
 
-  const calibrateNeutral = useCallback(() => {
-    const relativeAngle = frame.left?.rollAngle
-    if (relativeAngle == null) return
-    setTiltOffset((current) => current + relativeAngle)
+  const startCalibration = useCallback(() => {
+    calibrationDismissedRef.current = false
+    calibrationStageRef.current = 'neutral'
+    calibrationFramesRef.current = []
+    pendingTiltOffsetsRef.current = null
+    setCalibrationStage('neutral')
+    setCalibrationError(null)
+    setCalibrationSampleCount(0)
     stabilizerRef.current.reset()
     activeKeyRef.current = null
     synthRef.current.release()
     setActiveGesture(null)
     setActiveChord(null)
-  }, [frame.left])
+  }, [])
+
+  const cancelCalibration = useCallback(() => {
+    calibrationDismissedRef.current = true
+    calibrationStageRef.current = 'idle'
+    calibrationFramesRef.current = []
+    pendingTiltOffsetsRef.current = null
+    setCalibrationStage('idle')
+    setCalibrationError(null)
+    setCalibrationSampleCount(0)
+  }, [])
+
+  const captureNeutral = useCallback(() => {
+    const result = estimateNeutralOffsets(calibrationFramesRef.current)
+    if (!result.ok) {
+      setCalibrationError(result.message)
+      return
+    }
+    pendingTiltOffsetsRef.current = result.value
+    calibrationFramesRef.current = []
+    calibrationStageRef.current = 'thumbs'
+    setCalibrationStage('thumbs')
+    setCalibrationError(null)
+    setCalibrationSampleCount(0)
+  }, [])
+
+  const captureThumbs = useCallback(() => {
+    const tiltOffsetsResult = pendingTiltOffsetsRef.current
+    if (!tiltOffsetsResult) {
+      startCalibration()
+      return
+    }
+    const result = estimateThumbThresholds(calibrationFramesRef.current)
+    if (!result.ok) {
+      setCalibrationError(result.message)
+      return
+    }
+    const profile = createCalibrationProfile(tiltOffsetsResult, result.value)
+    saveCalibrationProfile(profile)
+    setCalibrationProfile(profile)
+    calibrationStageRef.current = 'complete'
+    calibrationFramesRef.current = []
+    setCalibrationStage('complete')
+    setCalibrationError(null)
+    setCalibrationSampleCount(CALIBRATION_SAMPLE_TARGET)
+  }, [startCalibration])
+
+  const finishCalibration = useCallback(() => {
+    calibrationStageRef.current = 'idle'
+    calibrationFramesRef.current = []
+    pendingTiltOffsetsRef.current = null
+    setCalibrationStage('idle')
+    setCalibrationError(null)
+    setCalibrationSampleCount(0)
+  }, [])
+
+  useEffect(() => {
+    if (sessionStarted && tracker.status === 'ready' && !calibrationProfile
+      && calibrationStage === 'idle' && !calibrationDismissedRef.current) {
+      startCalibration()
+    }
+  }, [calibrationProfile, calibrationStage, sessionStarted, startCalibration, tracker.status])
 
   const rightModifier = classifyRightHand(frame.right)
   const expression = rightHandExpression(frame.right)
@@ -183,6 +304,7 @@ export function PlayPage() {
     if (cameraStatus === 'requesting') return 'Waiting for camera'
     if (tracker.status === 'loading') return 'Loading hand model'
     if (cameraStatus === 'denied' || cameraStatus === 'error' || tracker.status === 'error') return 'Needs attention'
+    if (calibrationStage !== 'idle') return 'Personal calibration in progress'
     if (activeChord) return 'Two-hand chord is live'
     if (!frame.left && !frame.right) return 'Show both hands'
     if (!frame.left) return 'Show your left chord hand'
@@ -191,12 +313,16 @@ export function PlayPage() {
     if (frame.left.tilt === 'neutral') return 'Rotate the left hand for major or minor'
     if (!rightModifier) return 'Right hand: show one to four fingers'
     return 'Hold both signs steady'
-  }, [activeChord, cameraStatus, frame, rightModifier, sessionStarted, tracker.status])
+  }, [activeChord, calibrationStage, cameraStatus, frame, rightModifier, sessionStarted, tracker.status])
 
   const error = cameraError ?? tracker.error ?? audioError
   const confidenceCopy = frame.handCount
     ? `${frame.handCount}/2 hands · L ${Math.round((frame.left?.confidence ?? 0) * 100)} · R ${Math.round((frame.right?.confidence ?? 0) * 100)}`
     : 'Place both hands inside the frame'
+  const bothHandsReady = Boolean(
+    frame.left?.landmarks && frame.right?.landmarks
+      && frame.left.confidence >= 0.65 && frame.right.confidence >= 0.65,
+  )
 
   return (
     <div className="studio-page">
@@ -231,7 +357,11 @@ export function PlayPage() {
             <input aria-label="Rotation sensitivity" type="range" min="0" max="100" step="1" value={tiltSensitivity} onChange={(event) => setTiltSensitivity(Number(event.target.value))} />
             <strong>{tiltSensitivity}</strong>
           </label>
-          {sessionStarted && <button className="ghost-button" type="button" onClick={calibrateNeutral} disabled={!frame.left}>Set neutral</button>}
+          {sessionStarted && (
+            <button className="ghost-button" type="button" onClick={startCalibration} disabled={tracker.status !== 'ready'}>
+              {calibrationProfile ? 'Recalibrate' : 'Calibrate'}
+            </button>
+          )}
           {sessionStarted && <button className="ghost-button" type="button" onClick={endSession}>End session</button>}
         </div>
       </header>
@@ -252,6 +382,70 @@ export function PlayPage() {
                 <small>{activeChord.voicingLabel}</small>
                 <strong>{activeGesture?.left.degree}</strong>
                 <span>{activeChord.name}</span>
+              </div>
+            )}
+            {sessionStarted && calibrationStage !== 'idle' && !error && (
+              <div className="calibration-overlay" role="dialog" aria-modal="true" aria-labelledby="calibration-title">
+                <div className="calibration-progress" aria-label={`Calibration step ${calibrationStage === 'neutral' ? 1 : 2} of 2`}>
+                  <i className="complete" />
+                  <i className={calibrationStage === 'thumbs' || calibrationStage === 'complete' ? 'complete' : ''} />
+                </div>
+
+                {calibrationStage === 'neutral' && (
+                  <>
+                    <p className="eyebrow"><span /> Personal calibration · 01 / 02</p>
+                    <h2 id="calibration-title">Show your neutral hands.</h2>
+                    <p>Face both palms toward the camera, keep your fingers together, and let your thumbs rest naturally beside each hand.</p>
+                    <div className="calibration-hand-status">
+                      <span className={frame.left ? 'ready' : ''}><i /> Left hand <small>{frame.left ? 'tracked' : 'missing'}</small></span>
+                      <span className={frame.right ? 'ready' : ''}><i /> Right hand <small>{frame.right ? 'tracked' : 'missing'}</small></span>
+                    </div>
+                    {calibrationError && <p className="calibration-error" role="alert">{calibrationError}</p>}
+                    <div className="calibration-actions">
+                      <button className="ghost-button" type="button" onClick={cancelCalibration}>Use defaults</button>
+                      <button className="button button-primary" type="button" onClick={captureNeutral} disabled={!bothHandsReady || calibrationSampleCount < CALIBRATION_SAMPLE_TARGET}>
+                        Capture neutral <span>→</span>
+                      </button>
+                    </div>
+                    <small className="calibration-samples">Hold steady · {calibrationSampleCount}/{CALIBRATION_SAMPLE_TARGET} clean frames</small>
+                  </>
+                )}
+
+                {calibrationStage === 'thumbs' && (
+                  <>
+                    <p className="eyebrow"><span /> Personal calibration · 02 / 02</p>
+                    <h2 id="calibration-title">Spread both thumbs.</h2>
+                    <p>Keep your palms facing forward and push each thumb clearly away from the hand. This becomes your deliberate thumb-out position.</p>
+                    <div className="calibration-hand-status thumb-status">
+                      <span className={frame.left?.fingers[0] ? 'ready' : ''}><i /> Left thumb <small>{frame.left?.fingers[0] ? 'clear' : 'spread farther'}</small></span>
+                      <span className={frame.right?.fingers[0] ? 'ready' : ''}><i /> Right thumb <small>{frame.right?.fingers[0] ? 'clear' : 'spread farther'}</small></span>
+                    </div>
+                    {calibrationError && <p className="calibration-error" role="alert">{calibrationError}</p>}
+                    <div className="calibration-actions">
+                      <button className="ghost-button" type="button" onClick={startCalibration}>Back to neutral</button>
+                      <button className="button button-primary" type="button" onClick={captureThumbs} disabled={!bothHandsReady || calibrationSampleCount < CALIBRATION_SAMPLE_TARGET}>
+                        Save calibration <span>→</span>
+                      </button>
+                    </div>
+                    <small className="calibration-samples">Hold the full spread · {calibrationSampleCount}/{CALIBRATION_SAMPLE_TARGET} clean frames</small>
+                  </>
+                )}
+
+                {calibrationStage === 'complete' && (
+                  <>
+                    <div className="calibration-success" aria-hidden="true">✓</div>
+                    <p className="eyebrow"><span /> Calibration saved</p>
+                    <h2 id="calibration-title">Your hands are mapped.</h2>
+                    <p>Neutral rotation and deliberate thumb spread are now personalized independently for your left and right hands.</p>
+                    <div className="calibration-summary">
+                      <span><small>Left neutral</small><strong>{calibrationProfile?.tiltOffsets.Left.toFixed(1)}°</strong></span>
+                      <span><small>Right neutral</small><strong>{calibrationProfile?.tiltOffsets.Right.toFixed(1)}°</strong></span>
+                      <span><small>Profile</small><strong>Local</strong></span>
+                    </div>
+                    <button className="button button-primary" type="button" onClick={finishCalibration}>Start playing <span>→</span></button>
+                    <small className="calibration-samples">Saved only in this browser · recalibrate any time</small>
+                  </>
+                )}
               </div>
             )}
             {!sessionStarted && (
