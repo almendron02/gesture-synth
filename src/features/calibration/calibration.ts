@@ -39,27 +39,38 @@ function usableLandmarks(frames: readonly HandsFrameAnalysis[], handedness: Hand
   })
 }
 
-function enoughSamples(leftCount: number, rightCount: number): CalibrationResult<never> | null {
-  if (leftCount >= CALIBRATION_SAMPLE_TARGET && rightCount >= CALIBRATION_SAMPLE_TARGET) return null
+function enoughSamples(count: number, handedness: Handedness): CalibrationResult<never> | null {
+  if (count >= CALIBRATION_SAMPLE_TARGET) return null
   return {
     ok: false,
-    message: `Hold both hands steady a little longer (${Math.min(leftCount, rightCount)}/${CALIBRATION_SAMPLE_TARGET}).`,
+    message: `Hold your ${handedness.toLowerCase()} hand steady a little longer (${count}/${CALIBRATION_SAMPLE_TARGET}).`,
   }
+}
+
+export function estimateNeutralOffset(
+  frames: readonly HandsFrameAnalysis[],
+  handedness: Handedness,
+): CalibrationResult<number> {
+  const landmarks = usableLandmarks(frames, handedness)
+  const sampleError = enoughSamples(landmarks.length, handedness)
+  if (sampleError) return sampleError
+
+  return { ok: true, value: median(landmarks.map(calculateDisplayedRoll)) }
 }
 
 export function estimateNeutralOffsets(
   frames: readonly HandsFrameAnalysis[],
 ): CalibrationResult<Record<Handedness, number>> {
-  const left = usableLandmarks(frames, 'Left')
-  const right = usableLandmarks(frames, 'Right')
-  const sampleError = enoughSamples(left.length, right.length)
-  if (sampleError) return sampleError
+  const left = estimateNeutralOffset(frames, 'Left')
+  if (!left.ok) return left
+  const right = estimateNeutralOffset(frames, 'Right')
+  if (!right.ok) return right
 
   return {
     ok: true,
     value: {
-      Left: median(left.map(calculateDisplayedRoll)),
-      Right: median(right.map(calculateDisplayedRoll)),
+      Left: left.value,
+      Right: right.value,
     },
   }
 }
@@ -95,36 +106,38 @@ function deriveThumbThresholds(pose: ThumbPoseMeasurements): ThumbDetectionThres
 export function estimateThumbThresholds(
   frames: readonly HandsFrameAnalysis[],
 ): CalibrationResult<Record<Handedness, ThumbDetectionThresholds>> {
-  const leftPose = medianThumbPose(frames, 'Left')
-  const rightPose = medianThumbPose(frames, 'Right')
-  if (!leftPose || !rightPose) {
-    return {
-      ok: false,
-      message: `Hold both hands steady a little longer (${Math.min(
-        usableLandmarks(frames, 'Left').length,
-        usableLandmarks(frames, 'Right').length,
-      )}/${CALIBRATION_SAMPLE_TARGET}).`,
-    }
-  }
-
-  const insufficientHand = (['Left', 'Right'] as const).find((handedness) => {
-    const pose = handedness === 'Left' ? leftPose : rightPose
-    return pose.straightAngle < 140 || pose.gapRatio < 0.78 || pose.outwardRatio < 0.38
-  })
-  if (insufficientHand) {
-    return {
-      ok: false,
-      message: `Spread your ${insufficientHand.toLowerCase()} thumb farther away from the palm, then hold it still.`,
-    }
-  }
+  const left = estimateThumbThreshold(frames, 'Left')
+  if (!left.ok) return left
+  const right = estimateThumbThreshold(frames, 'Right')
+  if (!right.ok) return right
 
   return {
     ok: true,
     value: {
-      Left: deriveThumbThresholds(leftPose),
-      Right: deriveThumbThresholds(rightPose),
+      Left: left.value,
+      Right: right.value,
     },
   }
+}
+
+export function estimateThumbThreshold(
+  frames: readonly HandsFrameAnalysis[],
+  handedness: Handedness,
+): CalibrationResult<ThumbDetectionThresholds> {
+  const landmarks = usableLandmarks(frames, handedness)
+  const sampleError = enoughSamples(landmarks.length, handedness)
+  if (sampleError) return sampleError
+
+  const pose = medianThumbPose(frames, handedness)
+  if (!pose) return { ok: false, message: `Keep your ${handedness.toLowerCase()} hand visible.` }
+  if (pose.straightAngle < 140 || pose.gapRatio < 0.78 || pose.outwardRatio < 0.38) {
+    return {
+      ok: false,
+      message: `Spread your ${handedness.toLowerCase()} thumb farther away from the palm, then hold it still.`,
+    }
+  }
+
+  return { ok: true, value: deriveThumbThresholds(pose) }
 }
 
 export function createCalibrationProfile(

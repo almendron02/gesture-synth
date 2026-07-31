@@ -4,7 +4,9 @@ import type { HandAnalysis, Handedness, HandsFrameAnalysis } from '../gestures/g
 import {
   CALIBRATION_SAMPLE_TARGET,
   createCalibrationProfile,
+  estimateNeutralOffset,
   estimateNeutralOffsets,
+  estimateThumbThreshold,
   estimateThumbThresholds,
   parseCalibrationProfile,
 } from './calibration'
@@ -50,6 +52,14 @@ function frames(spreadThumb: boolean): HandsFrameAnalysis[] {
   }))
 }
 
+function oneHandFrames(handedness: Handedness, spreadThumb: boolean): HandsFrameAnalysis[] {
+  return Array.from({ length: CALIBRATION_SAMPLE_TARGET }, () => ({
+    left: handedness === 'Left' ? analysis('Left', 10, spreadThumb) : null,
+    right: handedness === 'Right' ? analysis('Right', -8, spreadThumb) : null,
+    handCount: 1,
+  }))
+}
+
 describe('personal calibration', () => {
   it('estimates a stable neutral offset independently for each hand', () => {
     const result = estimateNeutralOffsets(frames(false))
@@ -68,6 +78,24 @@ describe('personal calibration', () => {
     expect(result.value.Left.activate.gapRatio).toBeGreaterThanOrEqual(0.74)
     expect(result.value.Right.activate.outwardRatio).toBeGreaterThanOrEqual(0.34)
     expect(result.value.Left.hold.gapRatio).toBeLessThan(result.value.Left.activate.gapRatio)
+  })
+
+  it('calibrates one hand without requiring the other hand in frame', () => {
+    const leftNeutral = estimateNeutralOffset(oneHandFrames('Left', false), 'Left')
+    const rightThumb = estimateThumbThreshold(oneHandFrames('Right', true), 'Right')
+
+    expect(leftNeutral.ok).toBe(true)
+    if (!leftNeutral.ok) return
+    expect(leftNeutral.value).toBeCloseTo(10, 5)
+    expect(rightThumb.ok).toBe(true)
+  })
+
+  it('does not accept samples from the wrong hand', () => {
+    const result = estimateNeutralOffset(oneHandFrames('Right', false), 'Left')
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.message).toContain('left hand')
   })
 
   it('rejects a thumb that is long but remains alongside the hand', () => {

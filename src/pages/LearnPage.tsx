@@ -145,8 +145,8 @@ export function LearnPage() {
         </section>
       )}
       <div className="lesson-callout">
-        <div><small>Ready?</small><h2>Try your first chord.</h2></div>
-        <Link className="button button-primary" to="/play">Open studio →</Link>
+        <div><small>Live practice</small><h2>Let the camera coach you.</h2></div>
+        <Link className="button button-primary" to="/play?tutorial=1">Start live tutorial →</Link>
       </div>
     </div>
   )
