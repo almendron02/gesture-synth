@@ -58,7 +58,7 @@ describe('composition model', () => {
 
     const tracks = gestureLoopToTracks(loop)
     expect(tracks[0].notes).toHaveLength(3)
-    expect(tracks[0].notes[0]).toMatchObject({ startBeat: 1, durationBeats: 2, velocity: 0.8, brightness: 0.65, source: 'gesture' })
+    expect(tracks[0].notes[0]).toMatchObject({ startBeat: 1, durationBeats: 2, velocity: 0.8, brightness: 0.65, source: 'gesture', takeId: 'layer-1' })
 
     const imported = importGestureLoop(createComposition(), loop)
     expect(imported.bpm).toBe(120)

@@ -13,6 +13,7 @@ function isNote(value: unknown): value is ComposerNote {
     && Number.isFinite(note.expression)
     && Number.isFinite(note.brightness)
     && (note.source === 'drawn' || note.source === 'keyboard' || note.source === 'gesture')
+    && (note.takeId == null || typeof note.takeId === 'string')
 }
 
 function isTrack(value: unknown): value is ComposerTrack {

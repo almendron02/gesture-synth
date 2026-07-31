@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { GestureLoopRecorder, loopDurationMs } from '../looper/GestureLoopRecorder'
 import { loadGestureLoop } from '../looper/loopStorage'
+import type { Chord } from '../music/chords'
 import type { SoundPreset } from '../synth/soundPresets'
 import { ComposerAudioEngine } from './ComposerAudioEngine'
 import {
@@ -7,6 +9,7 @@ import {
   createComposition,
   createEmptyTrack,
   createId,
+  gestureLayerToNotes,
   importGestureLoop,
   midiToPitch,
   quantizationBeats,
@@ -36,6 +39,13 @@ interface HeldKeyboardNote {
   startedAtBeat: number | null
 }
 
+export type ComposerInputMode = 'keyboard' | 'gesture'
+
+interface GestureTakeReference {
+  trackId: string
+  noteIds: string[]
+}
+
 function eventTargetAcceptsText(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false
   return target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)
@@ -47,10 +57,14 @@ export function useComposer() {
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null)
   const [isPlaying, setIsPlaying] = useState(false)
   const [isRecording, setIsRecording] = useState(false)
+  const [inputMode, setInputModeState] = useState<ComposerInputMode>('keyboard')
+  const [countInBeat, setCountInBeat] = useState<number | null>(null)
+  const [lastGestureTake, setLastGestureTake] = useState<GestureTakeReference | null>(null)
   const [playheadBeat, setPlayheadBeat] = useState(0)
   const [keyboardOctave, setKeyboardOctave] = useState(4)
   const [audioError, setAudioError] = useState<string | null>(null)
   const audioRef = useRef(new ComposerAudioEngine())
+  const gestureRecorderRef = useRef(new GestureLoopRecorder())
   const animationFrameRef = useRef(0)
   const playbackStartedAtRef = useRef(0)
   const compositionRef = useRef(composition)
@@ -58,6 +72,12 @@ export function useComposer() {
   const playheadBeatRef = useRef(playheadBeat)
   const isPlayingRef = useRef(isPlaying)
   const isRecordingRef = useRef(isRecording)
+  const inputModeRef = useRef<ComposerInputMode>(inputMode)
+  const gestureRecordingActiveRef = useRef(false)
+  const gestureCountInActiveRef = useRef(false)
+  const gestureTrackIdRef = useRef(selectedTrackId)
+  const gestureInputReadyRef = useRef(false)
+  const gestureTimerIdsRef = useRef<number[]>([])
   const keyboardOctaveRef = useRef(keyboardOctave)
   const heldNotesRef = useRef(new Map<string, HeldKeyboardNote>())
 
@@ -66,6 +86,7 @@ export function useComposer() {
   playheadBeatRef.current = playheadBeat
   isPlayingRef.current = isPlaying
   isRecordingRef.current = isRecording
+  inputModeRef.current = inputMode
   keyboardOctaveRef.current = keyboardOctave
 
   useEffect(() => saveComposition(composition), [composition])
@@ -74,7 +95,16 @@ export function useComposer() {
     setComposition((current) => ({ ...update(current), updatedAt: new Date().toISOString() }))
   }, [])
 
+  const clearGestureTimers = useCallback(() => {
+    gestureTimerIdsRef.current.forEach((timerId) => window.clearTimeout(timerId))
+    gestureTimerIdsRef.current = []
+  }, [])
+
   const stop = useCallback(() => {
+    clearGestureTimers()
+    gestureRecorderRef.current.cancel()
+    gestureRecordingActiveRef.current = false
+    gestureCountInActiveRef.current = false
     audioRef.current.stop()
     cancelAnimationFrame(animationFrameRef.current)
     animationFrameRef.current = 0
@@ -82,9 +112,10 @@ export function useComposer() {
     isRecordingRef.current = false
     setIsPlaying(false)
     setIsRecording(false)
+    setCountInBeat(null)
     playheadBeatRef.current = 0
     setPlayheadBeat(0)
-  }, [])
+  }, [clearGestureTimers])
 
   const animatePlayhead = useCallback(() => {
     const tick = () => {
@@ -122,10 +153,142 @@ export function useComposer() {
     else void play(false)
   }, [play, stop])
 
+  const finishGestureTake = useCallback((timestamp = performance.now()) => {
+    if (!gestureRecordingActiveRef.current) return
+    const current = compositionRef.current
+    const trackId = gestureTrackIdRef.current
+    const layer = gestureRecorderRef.current.stop(timestamp, 1)
+    gestureRecordingActiveRef.current = false
+    gestureCountInActiveRef.current = false
+    clearGestureTimers()
+    audioRef.current.stop()
+    cancelAnimationFrame(animationFrameRef.current)
+    animationFrameRef.current = 0
+    isPlayingRef.current = false
+    isRecordingRef.current = false
+    setIsPlaying(false)
+    setIsRecording(false)
+    setCountInBeat(null)
+    playheadBeatRef.current = 0
+    setPlayheadBeat(0)
+    if (!layer) return
+
+    const takeId = createId('gesture-take')
+    const notes = gestureLayerToNotes(layer, current.bpm, takeId).map((note) => clampNote(note, current))
+    if (!notes.length) return
+    mutateComposition((value) => ({
+      ...value,
+      tracks: value.tracks.map((track) => track.id === trackId
+        ? { ...track, notes: [...track.notes, ...notes].sort((a, b) => a.startBeat - b.startBeat) }
+        : track),
+    }))
+    setLastGestureTake({ trackId, noteIds: notes.map((note) => note.id) })
+  }, [clearGestureTimers, mutateComposition])
+
+  const startGestureTake = useCallback(async () => {
+    if (!gestureInputReadyRef.current) {
+      setAudioError('Enable the Composer camera and wait for “Gesture input ready” before recording.')
+      return
+    }
+    stop()
+    try {
+      const current = compositionRef.current
+      await audioRef.current.prepare(current)
+      const beatMs = 60_000 / current.bpm
+      const countInMs = beatMs * 4
+      gestureTrackIdRef.current = selectedTrackIdRef.current
+      gestureCountInActiveRef.current = true
+      setCountInBeat(4)
+      setAudioError(null)
+      isPlayingRef.current = true
+      setIsPlaying(true)
+      playbackStartedAtRef.current = performance.now()
+      audioRef.current.play(current)
+      audioRef.current.metronomeClick(true)
+      animatePlayhead()
+
+      for (let beat = 1; beat < 4; beat += 1) {
+        gestureTimerIdsRef.current.push(window.setTimeout(() => {
+          if (!gestureCountInActiveRef.current) return
+          setCountInBeat(4 - beat)
+          audioRef.current.metronomeClick(false)
+        }, beat * beatMs))
+      }
+
+      gestureTimerIdsRef.current.push(window.setTimeout(() => {
+        if (!gestureCountInActiveRef.current) return
+        gestureCountInActiveRef.current = false
+        const recordingStartedAt = performance.now()
+        audioRef.current.stop()
+        audioRef.current.play(current)
+        playbackStartedAtRef.current = recordingStartedAt
+        gestureRecorderRef.current.start(recordingStartedAt, {
+          bpm: current.bpm,
+          bars: current.bars,
+          quantization: current.quantization,
+        })
+        gestureRecordingActiveRef.current = true
+        isRecordingRef.current = true
+        setIsRecording(true)
+        setCountInBeat(null)
+        animatePlayhead()
+        const durationMs = loopDurationMs(current.bpm, current.bars)
+        gestureTimerIdsRef.current.push(window.setTimeout(
+          () => finishGestureTake(recordingStartedAt + durationMs),
+          durationMs,
+        ))
+      }, countInMs))
+    } catch {
+      stop()
+      setAudioError('Gesture recording could not start. Check this site’s sound permission and try again.')
+    }
+  }, [animatePlayhead, finishGestureTake, stop])
+
   const toggleRecording = useCallback(() => {
-    if (isRecordingRef.current) stop()
+    if (gestureCountInActiveRef.current) {
+      stop()
+      return
+    }
+    if (gestureRecordingActiveRef.current) {
+      finishGestureTake()
+      return
+    }
+    if (isRecordingRef.current) {
+      stop()
+      return
+    }
+    if (inputModeRef.current === 'gesture') void startGestureTake()
     else void play(true)
-  }, [play, stop])
+  }, [finishGestureTake, play, startGestureTake, stop])
+
+  const setInputMode = useCallback((mode: ComposerInputMode) => {
+    if (isPlayingRef.current || gestureCountInActiveRef.current) stop()
+    inputModeRef.current = mode
+    setInputModeState(mode)
+  }, [stop])
+
+  const setGestureInputReady = useCallback((ready: boolean) => {
+    gestureInputReadyRef.current = ready
+    if (ready) setAudioError(null)
+  }, [])
+
+  const captureGestureChord = useCallback((chord: Chord | null, timestamp: number, expression: number, brightness: number) => {
+    if (!gestureRecordingActiveRef.current) return
+    gestureRecorderRef.current.update(chord, timestamp, expression, brightness)
+  }, [])
+
+  const undoLastGestureTake = useCallback(() => {
+    if (!lastGestureTake) return
+    const noteIds = new Set(lastGestureTake.noteIds)
+    mutateComposition((current) => ({
+      ...current,
+      tracks: current.tracks.map((track) => track.id === lastGestureTake.trackId
+        ? { ...track, notes: track.notes.filter((note) => !noteIds.has(note.id)) }
+        : track),
+    }))
+    setLastGestureTake(null)
+    setSelectedNoteId(null)
+  }, [lastGestureTake, mutateComposition])
 
   const addNote = useCallback((pitch: string, startBeat: number, durationBeats?: number, source: ComposerNote['source'] = 'drawn') => {
     const trackId = selectedTrackIdRef.current
@@ -268,7 +431,7 @@ export function useComposer() {
       if (!track) return
       heldNotes.set(event.code, {
         pitch,
-        startedAtBeat: isRecordingRef.current ? playheadBeatRef.current : null,
+        startedAtBeat: isRecordingRef.current && inputModeRef.current === 'keyboard' ? playheadBeatRef.current : null,
       })
       void audioRef.current.previewStart(pitch, track.preset)
     }
@@ -284,9 +447,11 @@ export function useComposer() {
   }, [addNote, togglePlay, toggleRecording])
 
   useEffect(() => () => {
+    clearGestureTimers()
+    gestureRecorderRef.current.cancel()
     cancelAnimationFrame(animationFrameRef.current)
     audioRef.current.dispose()
-  }, [])
+  }, [clearGestureTimers])
 
   return {
     composition,
@@ -294,12 +459,17 @@ export function useComposer() {
     selectedNoteId,
     isPlaying,
     isRecording,
+    inputMode,
+    countInBeat,
     playheadBeat,
     keyboardOctave,
     audioError,
+    canUndoGestureTake: Boolean(lastGestureTake),
     hasStudioLoop: Boolean(loadGestureLoop()),
     setSelectedTrackId,
     setSelectedNoteId,
+    setInputMode,
+    setGestureInputReady,
     setBpm,
     setBars,
     setQuantization,
@@ -313,6 +483,8 @@ export function useComposer() {
     deleteSelectedNote,
     duplicateSelectedNote,
     importStudioLoop,
+    captureGestureChord,
+    undoLastGestureTake,
     togglePlay,
     toggleRecording,
     stop,

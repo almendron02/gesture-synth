@@ -1,4 +1,4 @@
-import type { GestureLoop } from '../looper/looper.types'
+import type { GestureLoop, GestureLoopLayer } from '../looper/looper.types'
 import type { Composition, ComposerNote, ComposerTrack } from './composer.types'
 
 export const BEATS_PER_BAR = 4
@@ -104,7 +104,6 @@ export function transposePitch(pitch: string, semitones: number): string {
 }
 
 export function gestureLoopToTracks(loop: GestureLoop): ComposerTrack[] {
-  const beatMs = 60_000 / loop.bpm
   return loop.layers.map((layer, layerIndex) => ({
     id: createId('gesture-track'),
     name: `Gesture ${layerIndex + 1}`,
@@ -112,17 +111,23 @@ export function gestureLoopToTracks(loop: GestureLoop): ComposerTrack[] {
     color: trackDefaults[layerIndex % trackDefaults.length].color,
     muted: layer.muted,
     solo: false,
-    notes: layer.events.flatMap((event) => event.chord.notes.map((pitch, noteIndex) => ({
-      id: createId(`gesture-note-${noteIndex}`),
-      pitch,
-      startBeat: event.startMs / beatMs,
-      durationBeats: event.durationMs / beatMs,
-      velocity: event.expression,
-      expression: event.expression,
-      brightness: event.brightness,
-      source: 'gesture' as const,
-    }))),
+    notes: gestureLayerToNotes(layer, loop.bpm, layer.id),
   }))
+}
+
+export function gestureLayerToNotes(layer: GestureLoopLayer, bpm: number, takeId: string): ComposerNote[] {
+  const beatMs = 60_000 / bpm
+  return layer.events.flatMap((event) => event.chord.notes.map((pitch, noteIndex) => ({
+    id: createId(`gesture-note-${noteIndex}`),
+    pitch,
+    startBeat: event.startMs / beatMs,
+    durationBeats: event.durationMs / beatMs,
+    velocity: event.expression,
+    expression: event.expression,
+    brightness: event.brightness,
+    source: 'gesture' as const,
+    takeId,
+  })))
 }
 
 export function importGestureLoop(composition: Composition, loop: GestureLoop): Composition {

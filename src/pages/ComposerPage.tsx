@@ -1,7 +1,10 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { AutomationLanes } from '../features/composer/AutomationLanes'
+import { ComposerGesturePanel } from '../features/composer/ComposerGesturePanel'
 import { PianoRoll } from '../features/composer/PianoRoll'
 import { totalBeats } from '../features/composer/composition'
 import { useComposer } from '../features/composer/useComposer'
+import { useComposerGestureInput } from '../features/composer/useComposerGestureInput'
 import { soundPresetDefinitions } from '../features/synth/soundPresets'
 
 const keyboardKeys = [
@@ -18,6 +21,21 @@ export function ComposerPage() {
     .flatMap((track) => track.notes)
     .find((note) => note.id === composer.selectedNoteId) ?? null, [composer.composition.tracks, composer.selectedNoteId])
   const beats = totalBeats(composer.composition)
+  const gestureInput = useComposerGestureInput({
+    preset: selectedTrack.preset,
+    onGestureFrame: composer.captureGestureChord,
+  })
+  const gestureReady = gestureInput.enabled && gestureInput.trackerStatus === 'ready'
+  const captureBusy = composer.isRecording || composer.countInBeat != null
+  const gestureInputEnabled = gestureInput.enabled
+  const stopGestureInput = gestureInput.stop
+  const setGestureInputReady = composer.setGestureInputReady
+
+  useEffect(() => {
+    if (composer.inputMode === 'keyboard' && gestureInputEnabled) stopGestureInput()
+  }, [composer.inputMode, gestureInputEnabled, stopGestureInput])
+
+  useEffect(() => setGestureInputReady(gestureReady), [gestureReady, setGestureInputReady])
 
   const handleImport = () => {
     const imported = composer.importStudioLoop()
@@ -43,7 +61,11 @@ export function ComposerPage() {
           </div>
           <div className="composer-play-controls">
             <button type="button" className={composer.isPlaying && !composer.isRecording ? 'active' : ''} onClick={composer.togglePlay} aria-label={composer.isPlaying ? 'Stop playback' : 'Play composition'}>{composer.isPlaying && !composer.isRecording ? '■' : '▶'}</button>
-            <button type="button" className={`composer-record ${composer.isRecording ? 'active' : ''}`} onClick={composer.toggleRecording}><i /> {composer.isRecording ? 'Stop' : 'Record keys'}</button>
+            <div className="composer-input-switch" role="group" aria-label="Recording input">
+              <button type="button" className={composer.inputMode === 'keyboard' ? 'active' : ''} aria-pressed={composer.inputMode === 'keyboard'} onClick={() => composer.setInputMode('keyboard')}>Keys</button>
+              <button type="button" className={composer.inputMode === 'gesture' ? 'active' : ''} aria-pressed={composer.inputMode === 'gesture'} onClick={() => composer.setInputMode('gesture')}>Hands</button>
+            </div>
+            <button type="button" className={`composer-record ${captureBusy ? 'active' : ''}`} disabled={composer.inputMode === 'gesture' && !gestureReady && !captureBusy} onClick={composer.toggleRecording}><i /> {composer.countInBeat != null ? `Count ${composer.countInBeat}` : composer.isRecording ? 'Stop take' : composer.inputMode === 'gesture' ? 'Record hands' : 'Record keys'}</button>
             <div><small>Position</small><strong>{Math.floor(composer.playheadBeat / 4) + 1}.{Math.floor(composer.playheadBeat % 4) + 1}</strong></div>
           </div>
           <div className="composer-session-settings">
@@ -53,14 +75,39 @@ export function ComposerPage() {
           </div>
         </header>
 
+        {composer.inputMode === 'gesture' && (
+          <ComposerGesturePanel
+            videoRef={gestureInput.videoRef}
+            canvasRef={gestureInput.canvasRef}
+            enabled={gestureInput.enabled}
+            cameraStatus={gestureInput.cameraStatus}
+            trackerStatus={gestureInput.trackerStatus}
+            frame={gestureInput.frame}
+            activeGesture={gestureInput.activeGesture}
+            activeChord={gestureInput.activeChord}
+            expression={gestureInput.expression}
+            brightness={gestureInput.brightness}
+            trackName={selectedTrack.name}
+            countInBeat={composer.countInBeat}
+            recording={composer.isRecording}
+            calibrated={gestureInput.calibrated}
+            canUndo={composer.canUndoGestureTake}
+            error={gestureInput.error}
+            onEnable={() => void gestureInput.start()}
+            onDisable={gestureInput.stop}
+            onRecord={composer.toggleRecording}
+            onUndo={composer.undoLastGestureTake}
+          />
+        )}
+
         <div className="composer-workspace">
           <aside className="composer-tracks" aria-label="Composition tracks">
             <header><div><small>Tracks</small><strong>{composer.composition.tracks.length}</strong></div><button type="button" onClick={composer.addTrack}>＋ Add</button></header>
             {composer.composition.tracks.map((track, index) => (
-              <article className={`${track.color} ${track.id === selectedTrack.id ? 'selected' : ''}`} onClick={() => { composer.setSelectedTrackId(track.id); composer.setSelectedNoteId(null) }} key={track.id}>
+              <article className={`${track.color} ${track.id === selectedTrack.id ? 'selected' : ''} ${composer.inputMode === 'gesture' && track.id === selectedTrack.id ? 'armed' : ''}`} onClick={() => { if (!captureBusy) { composer.setSelectedTrackId(track.id); composer.setSelectedNoteId(null) } }} key={track.id}>
                 <button type="button" className="track-select" aria-label={`Select ${track.name}`}>
                   <span>{String(index + 1).padStart(2, '0')}</span>
-                  <div><small>{track.notes.some((note) => note.source === 'gesture') ? 'Gesture track' : 'Instrument track'}</small><strong>{track.name}</strong><em>{track.notes.length} notes</em></div>
+                  <div><small>{composer.inputMode === 'gesture' && track.id === selectedTrack.id ? 'Armed for gestures' : track.notes.some((note) => note.source === 'gesture') ? 'Gesture track' : 'Instrument track'}</small><strong>{track.name}</strong><em>{track.notes.length} notes</em></div>
                 </button>
                 <div className="track-actions">
                   <button type="button" className={track.muted ? 'active' : ''} aria-label={`${track.muted ? 'Unmute' : 'Mute'} ${track.name}`} onClick={(event) => { event.stopPropagation(); composer.toggleTrackMute(track.id) }}>M</button>
@@ -95,6 +142,8 @@ export function ComposerPage() {
               onSelectNote={composer.setSelectedNoteId}
               onUpdateNote={composer.updateNote}
             />
+
+            <AutomationLanes composition={composer.composition} track={selectedTrack} />
 
             <footer className="composer-inspector">
               {selectedNote ? (

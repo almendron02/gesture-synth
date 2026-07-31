@@ -11,6 +11,7 @@ export interface ComposerNote {
   expression: number
   brightness: number
   source: NoteSource
+  takeId?: string
 }
 
 export interface ComposerTrack {

@@ -24,6 +24,7 @@ function activeNotesAt(track: ComposerTrack, beat: number): string[] {
 export class ComposerAudioEngine {
   private trackEngines = new Map<string, SynthEngine>()
   private previewEngine = new SynthEngine()
+  private metronomeEngine = new SynthEngine()
   private previewNotes = new Set<string>()
   private timerIds: number[] = []
   private playing = false
@@ -37,6 +38,9 @@ export class ComposerAudioEngine {
     }))
     this.previewEngine.setVolume(0.32)
     await this.previewEngine.start()
+    this.metronomeEngine.setPreset('original')
+    this.metronomeEngine.setVolume(0.24)
+    await this.metronomeEngine.start()
   }
 
   play(composition: Composition): void {
@@ -90,11 +94,18 @@ export class ComposerAudioEngine {
     else this.previewEngine.release()
   }
 
+  metronomeClick(accent = false): void {
+    this.metronomeEngine.setVolume(accent ? 0.3 : 0.2)
+    this.metronomeEngine.play(noteStateChord([accent ? 'C6' : 'G5']))
+    this.timerIds.push(window.setTimeout(() => this.metronomeEngine.release(), 75))
+  }
+
   stop(): void {
     this.playing = false
     this.timerIds.forEach((timerId) => window.clearTimeout(timerId))
     this.timerIds = []
     this.trackEngines.forEach((engine) => engine.release())
+    this.metronomeEngine.release()
   }
 
   dispose(): void {
@@ -102,6 +113,7 @@ export class ComposerAudioEngine {
     this.trackEngines.forEach((engine) => engine.dispose())
     this.trackEngines.clear()
     this.previewEngine.dispose()
+    this.metronomeEngine.dispose()
     this.previewNotes.clear()
   }
 

@@ -232,6 +232,17 @@ export function GuidePage() {
             </ol>
             <Link className="button button-primary" to="/play">Open MIDI Bridge →</Link>
           </article>
+          <article>
+            <small>Edit the performance</small>
+            <h3>Record into Composer.</h3>
+            <ol>
+              <li>Select a destination track.</li>
+              <li>Choose Hands as the input.</li>
+              <li>Enable the compact camera.</li>
+              <li>Record after the four-count.</li>
+            </ol>
+            <Link className="button button-primary" to="/compose">Open Composer →</Link>
+          </article>
         </div>
       </section>
 
