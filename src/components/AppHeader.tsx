@@ -3,6 +3,7 @@ import { NavLink } from 'react-router-dom'
 const navItems = [
   ['Play', '/play'],
   ['Learn', '/learn'],
+  ['Guide', '/guide'],
   ['Songs', '/songs'],
 ] as const
 

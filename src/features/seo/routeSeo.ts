@@ -45,6 +45,15 @@ const staticPages: Record<string, RouteSeoMetadata> = {
     robots: indexableRobots,
     breadcrumbs: [{ name: 'Learn', path: '/learn' }],
   },
+  '/guide': {
+    title: 'Recording and MIDI Guide | Gesture Synth',
+    description: 'Learn how to record gesture loops, add overdub layers, and connect Gesture Synth to a DAW or external instrument with Web MIDI.',
+    canonicalPath: '/guide',
+    pageName: 'Gesture Synth Recording and MIDI Guide',
+    schemaType: 'LearningResource',
+    robots: indexableRobots,
+    breadcrumbs: [{ name: 'Guide', path: '/guide' }],
+  },
   '/songs': {
     title: 'Guided Synth Song Tutorials | Gesture Synth',
     description: 'Practice hand gestures through guided synth arrangements with chord diagrams, presets, difficulty levels, and precisely timed changes.',
@@ -114,7 +123,11 @@ export function buildStructuredData(metadata: RouteSeoMetadata): object {
   }
 
   if (metadata.schemaType === 'LearningResource') {
-    page.learningResourceType = metadata.song ? 'Guided song practice' : 'Interactive gesture guide'
+    page.learningResourceType = metadata.song
+      ? 'Guided song practice'
+      : metadata.canonicalPath === '/guide'
+        ? 'Recording and MIDI guide'
+        : 'Interactive gesture guide'
     page.isAccessibleForFree = true
     if (metadata.song) {
       page.educationalLevel = metadata.song.level

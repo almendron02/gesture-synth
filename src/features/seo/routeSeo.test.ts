@@ -21,6 +21,14 @@ describe('route SEO metadata', () => {
     expect(metadata.description).toContain('Web MIDI')
   })
 
+  it('publishes indexable metadata for the recording and MIDI guide', () => {
+    const metadata = getRouteSeo('/guide')
+
+    expect(metadata.title).toContain('Recording and MIDI Guide')
+    expect(metadata.schemaType).toBe('LearningResource')
+    expect(JSON.stringify(buildStructuredData(metadata))).toContain('Recording and MIDI guide')
+  })
+
   it('builds unique metadata for a guided song', () => {
     const metadata = getRouteSeo('/songs/amazing-grace')
 
