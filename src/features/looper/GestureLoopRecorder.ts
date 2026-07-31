@@ -1,6 +1,6 @@
 import type { Chord } from '../music/chords'
 import type {
-  GestureLoop,
+  GestureLoopLayer,
   LoopQuantization,
   LoopRecordingOptions,
   RecordedChordEvent,
@@ -110,7 +110,7 @@ export class GestureLoopRecorder {
     }
   }
 
-  stop(timestamp: number): GestureLoop | null {
+  stop(timestamp: number, layerNumber = 1): GestureLoopLayer | null {
     if (this.recordingStartedAt == null || !this.options) return null
     const options = this.options
     const duration = loopDurationMs(options.bpm, options.bars)
@@ -120,13 +120,10 @@ export class GestureLoopRecorder {
     if (!events.length) return null
 
     return {
-      version: 1,
-      id: `loop-${Date.now()}`,
+      id: `layer-${Date.now()}-${layerNumber}`,
+      name: `Layer ${layerNumber}`,
       createdAt: new Date().toISOString(),
-      bpm: options.bpm,
-      bars: options.bars,
-      quantization: options.quantization,
-      durationMs: duration,
+      muted: false,
       events,
     }
   }

@@ -47,6 +47,10 @@ const GESTURE_CHANGE_DELAY_MS = 24
 type CalibrationStage = 'idle' | 'left-neutral' | 'left-thumb' | 'right-neutral' | 'right-thumb' | 'complete'
 type TutorialStage = 'idle' | 'active' | 'complete'
 
+function looperIsCapturing(mode: string): boolean {
+  return mode === 'count-in' || mode === 'recording' || mode === 'overdub-count-in' || mode === 'overdubbing'
+}
+
 function calibrationHand(stage: CalibrationStage): 'Left' | 'Right' | null {
   if (stage === 'left-neutral' || stage === 'left-thumb') return 'Left'
   if (stage === 'right-neutral' || stage === 'right-thumb') return 'Right'
@@ -253,7 +257,7 @@ export function PlayPage() {
   }, [beginSession])
 
   const endSession = useCallback(() => {
-    if (looper.mode === 'count-in' || looper.mode === 'recording') looper.cancelRecording()
+    if (looperIsCapturing(looper.mode)) looper.cancelRecording()
     if (looper.mode === 'playing') looper.stopPlayback()
     synthRef.current.release()
     stabilizerRef.current.reset()
@@ -298,7 +302,7 @@ export function PlayPage() {
   useEffect(() => () => synthRef.current.dispose(), [])
 
   const startLiveTutorial = useCallback(() => {
-    if (looper.mode === 'count-in' || looper.mode === 'recording') looper.cancelRecording()
+    if (looperIsCapturing(looper.mode)) looper.cancelRecording()
     if (looper.mode === 'playing') looper.stopPlayback()
     tutorialRequestedRef.current = false
     tutorialStageRef.current = 'active'
@@ -324,7 +328,7 @@ export function PlayPage() {
   }, [])
 
   const startCalibration = useCallback(() => {
-    if (looper.mode === 'count-in' || looper.mode === 'recording') looper.cancelRecording()
+    if (looperIsCapturing(looper.mode)) looper.cancelRecording()
     if (looper.mode === 'playing') looper.stopPlayback()
     calibrationDismissedRef.current = false
     calibrationStageRef.current = 'left-neutral'
@@ -541,13 +545,13 @@ export function PlayPage() {
               </div>
             )}
             {sessionStarted && calibrationStage === 'idle' && tutorialStage === 'idle'
-              && (looper.mode === 'count-in' || looper.mode === 'recording') && (
+              && looperIsCapturing(looper.mode) && (
                 <div className={`camera-loop-transport ${looper.mode}`} aria-live="polite">
-                  {looper.mode === 'count-in' ? (
-                    <><small>Recording starts in</small><strong>{looper.countInBeat}</strong><span>Raise both hands</span></>
+                  {looper.mode === 'count-in' || looper.mode === 'overdub-count-in' ? (
+                    <><small>{looper.mode === 'overdub-count-in' ? 'Overdub starts in' : 'Recording starts in'}</small><strong>{looper.countInBeat}</strong><span>Raise both hands</span></>
                   ) : (
                     <>
-                      <div><small><i /> Recording</small><strong>{looper.bars} bars · {looper.bpm} BPM</strong></div>
+                      <div><small><i /> {looper.mode === 'overdubbing' ? 'Overdubbing' : 'Recording'}</small><strong>{looper.loop?.bars ?? looper.bars} bars · {looper.loop?.bpm ?? looper.bpm} BPM</strong></div>
                       <span>{activeChord ? activeChord.name : 'Waiting for a complete chord'}</span>
                       <b><i style={{ width: `${looper.transportProgress * 100}%` }} /></b>
                     </>
@@ -733,16 +737,27 @@ export function PlayPage() {
         activeChord={activeChord}
         audioError={looper.audioError}
         canRecord={sessionStarted && tracker.status === 'ready' && calibrationStage === 'idle' && tutorialStage === 'idle'}
+        maxLayers={looper.maxLayers}
         onBpmChange={looper.setBpm}
         onBarsChange={looper.setBars}
         onQuantizationChange={looper.setQuantization}
         onRecord={() => {
+          if (looper.loop && !window.confirm('Replace the current layered session with a new base take?')) return
           document.querySelector('.camera-stage')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
           void looper.startRecording()
+        }}
+        onOverdub={() => {
+          document.querySelector('.camera-stage')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+          void looper.startOverdub()
         }}
         onCancelRecording={looper.cancelRecording}
         onPlay={() => void looper.startPlayback()}
         onStopPlayback={looper.stopPlayback}
+        onToggleLayerMute={looper.toggleLayerMute}
+        onRemoveLayer={(layerId) => {
+          if (window.confirm('Delete this loop layer? The other layers will stay intact.')) looper.removeLayer(layerId)
+        }}
+        onUndoLayer={looper.undoLastLayer}
         onClear={() => {
           if (window.confirm('Clear the saved performance loop? This take cannot be recovered.')) looper.clearLoop()
         }}

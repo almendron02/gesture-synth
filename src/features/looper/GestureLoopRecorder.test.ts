@@ -13,7 +13,7 @@ describe('GestureLoopRecorder', () => {
     recorder.update(fMajor, 1500, 0.7, 0.6)
     const loop = recorder.stop(3000)
 
-    expect(loop?.durationMs).toBe(2000)
+    expect(loop?.name).toBe('Layer 1')
     expect(loop?.events).toHaveLength(2)
     expect(loop?.events[0]).toMatchObject({ startMs: 100, durationMs: 400 })
     expect(loop?.events[0].expression).toBeCloseTo(0.7)
@@ -29,7 +29,6 @@ describe('GestureLoopRecorder', () => {
     recorder.update(null, 615, 0.65, 0.5)
     const loop = recorder.stop(4000)
 
-    expect(loop?.durationMs).toBe(4000)
     expect(loop?.events[0]).toMatchObject({ startMs: 250, durationMs: 250 })
   })
 
