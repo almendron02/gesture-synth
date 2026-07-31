@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useCamera } from '../features/camera/useCamera'
 import {
   CALIBRATION_SAMPLE_TARGET,
+  DEFAULT_THUMB_SETTINGS,
+  DEFAULT_TILT_OFFSETS,
   createCalibrationProfile,
   estimateNeutralOffset,
   estimateThumbThreshold,
@@ -11,7 +13,6 @@ import {
 } from '../features/calibration/calibration'
 import { FingerDiagram } from '../features/gestures/FingerDiagram'
 import { GestureStabilizer } from '../features/gestures/GestureStabilizer'
-import { DEFAULT_THUMB_THRESHOLDS } from '../features/gestures/classifyHand'
 import {
   classifyRightHand,
   combinePerformanceGesture,
@@ -41,12 +42,6 @@ const fingerLabels = ['T', 'I', 'M', 'R', 'P']
 const LOST_GESTURE_HOLD_MS = 500
 const GESTURE_START_DELAY_MS = 60
 const GESTURE_CHANGE_DELAY_MS = 24
-const DEFAULT_TILT_OFFSETS = { Left: 0, Right: 0 } as const
-const DEFAULT_THUMB_SETTINGS = {
-  Left: DEFAULT_THUMB_THRESHOLDS,
-  Right: DEFAULT_THUMB_THRESHOLDS,
-} as const
-
 type CalibrationStage = 'idle' | 'left-neutral' | 'left-thumb' | 'right-neutral' | 'right-thumb' | 'complete'
 type TutorialStage = 'idle' | 'active' | 'complete'
 

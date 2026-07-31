@@ -9,6 +9,11 @@ import type { Handedness, HandsFrameAnalysis } from '../gestures/gesture.types'
 
 export const CALIBRATION_STORAGE_KEY = 'gesture-synth:calibration-v1'
 export const CALIBRATION_SAMPLE_TARGET = 8
+export const DEFAULT_TILT_OFFSETS: Record<Handedness, number> = { Left: 0, Right: 0 }
+export const DEFAULT_THUMB_SETTINGS: Record<Handedness, ThumbDetectionThresholds> = {
+  Left: DEFAULT_THUMB_THRESHOLDS,
+  Right: DEFAULT_THUMB_THRESHOLDS,
+}
 
 export interface CalibrationProfile {
   version: 1
