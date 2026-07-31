@@ -14,6 +14,13 @@ describe('route SEO metadata', () => {
     expect(getRouteSeo('/learn/')).toEqual(getRouteSeo('/learn'))
   })
 
+  it('describes the studio as a Web MIDI controller', () => {
+    const metadata = getRouteSeo('/play')
+
+    expect(metadata.title).toContain('MIDI Controller')
+    expect(metadata.description).toContain('Web MIDI')
+  })
+
   it('builds unique metadata for a guided song', () => {
     const metadata = getRouteSeo('/songs/amazing-grace')
 

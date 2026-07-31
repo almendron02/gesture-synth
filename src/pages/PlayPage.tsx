@@ -29,6 +29,8 @@ import {
 import { useHandTracking } from '../features/hand-tracking/useHandTracking'
 import { LooperPanel } from '../features/looper/LooperPanel'
 import { useGestureLooper } from '../features/looper/useGestureLooper'
+import { MidiPanel } from '../features/midi/MidiPanel'
+import { useMidiOutput } from '../features/midi/useMidiOutput'
 import { buildChord, type Chord } from '../features/music/chords'
 import { SynthEngine } from '../features/synth/SynthEngine'
 import { soundPresetDefinitions, type SoundPreset } from '../features/synth/soundPresets'
@@ -44,6 +46,7 @@ const fingerLabels = ['T', 'I', 'M', 'R', 'P']
 const LOST_GESTURE_HOLD_MS = 500
 const GESTURE_START_DELAY_MS = 60
 const GESTURE_CHANGE_DELAY_MS = 24
+const LOCAL_MONITOR_STORAGE_KEY = 'gesture-synth:local-monitor'
 type CalibrationStage = 'idle' | 'left-neutral' | 'left-thumb' | 'right-neutral' | 'right-thumb' | 'complete'
 type TutorialStage = 'idle' | 'active' | 'complete'
 
@@ -93,6 +96,7 @@ export function PlayPage() {
   const lastHandCountRef = useRef(0)
   const volumeRef = useRef(0.42)
   const expressionRef = useRef(0.65)
+  const brightnessRef = useRef(0.55)
   const calibrationStageRef = useRef<CalibrationStage>('idle')
   const calibrationFramesRef = useRef<HandsFrameAnalysis[]>([])
   const pendingTiltOffsetsRef = useRef<Partial<CalibrationProfile['tiltOffsets']>>({})
@@ -122,6 +126,8 @@ export function PlayPage() {
     return soundPresetDefinitions.some((preset) => preset.id === stored) ? stored as SoundPreset : 'original'
   })
   const [volume, setVolume] = useState(0.42)
+  const [localMonitor, setLocalMonitor] = useState(() => window.localStorage.getItem(LOCAL_MONITOR_STORAGE_KEY) !== 'off')
+  const localMonitorRef = useRef(localMonitor)
   const [tiltSensitivity, setTiltSensitivity] = useState(() => {
     const stored = window.localStorage.getItem('gesture-synth:tilt-sensitivity-v2')
     if (stored == null) return 78
@@ -130,7 +136,13 @@ export function PlayPage() {
   })
   const looper = useGestureLooper({ preset: soundPreset, volume })
   const captureLoopChord = looper.captureChord
+  const midi = useMidiOutput()
+  const playMidiChord = midi.playChord
+  const releaseMidi = midi.release
+  const updateMidiControllers = midi.updateControllers
   const { status: cameraStatus, error: cameraError, start: startCamera, stop: stopCamera } = useCamera(videoRef)
+
+  localMonitorRef.current = localMonitor
 
   // Higher sensitivity means a smaller rotation is needed to leave the neutral zone.
   const tiltThreshold = useMemo(() => 2 + (100 - tiltSensitivity) * 0.12, [tiltSensitivity])
@@ -190,6 +202,7 @@ export function PlayPage() {
       if (activeKeyRef.current !== null) {
         activeKeyRef.current = null
         synthRef.current.release()
+        releaseMidi()
         setActiveGesture(null)
         setActiveChord(null)
       }
@@ -203,8 +216,12 @@ export function PlayPage() {
     const expression = rightHandExpression(nextFrame.right)
     const brightness = rightHandBrightness(nextFrame.right)
     expressionRef.current = expression
-    synthRef.current.setVolume(volumeRef.current * expression)
-    synthRef.current.setBrightness(brightness)
+    brightnessRef.current = brightness
+    updateMidiControllers(expression, brightness, timestamp)
+    if (localMonitorRef.current) {
+      synthRef.current.setVolume(volumeRef.current * expression)
+      synthRef.current.setBrightness(brightness)
+    }
     const performanceChord = stable
       ? buildChord(stable.left.degree, stable.left.quality, stable.right.voicing, stable.right.octaveShift)
       : null
@@ -213,10 +230,12 @@ export function PlayPage() {
     if (nextKey !== activeKeyRef.current) {
       activeKeyRef.current = nextKey
       if (stable && performanceChord) {
-        synthRef.current.play(performanceChord)
+        if (localMonitorRef.current) synthRef.current.play(performanceChord)
+        playMidiChord(performanceChord)
         setActiveChord(performanceChord)
       } else {
         synthRef.current.release()
+        releaseMidi()
         setActiveChord(null)
       }
       setActiveGesture(stable)
@@ -227,7 +246,7 @@ export function PlayPage() {
       lastHandCountRef.current = nextFrame.handCount
       setFrame(nextFrame)
     }
-  }, [captureLoopChord])
+  }, [captureLoopChord, playMidiChord, releaseMidi, updateMidiControllers])
 
   const tracker = useHandTracking({
     videoRef,
@@ -242,8 +261,10 @@ export function PlayPage() {
   const beginSession = useCallback(async () => {
     setAudioError(null)
     try {
-      await synthRef.current.start()
-      synthRef.current.setVolume(volumeRef.current * expressionRef.current)
+      if (localMonitorRef.current) {
+        await synthRef.current.start()
+        synthRef.current.setVolume(volumeRef.current * expressionRef.current)
+      }
     } catch {
       setAudioError('Audio could not start. Check this site’s sound permissions.')
     }
@@ -260,6 +281,7 @@ export function PlayPage() {
     if (looperIsCapturing(looper.mode)) looper.cancelRecording()
     if (looper.mode === 'playing') looper.stopPlayback()
     synthRef.current.release()
+    releaseMidi()
     stabilizerRef.current.reset()
     activeKeyRef.current = null
     lastHandCountRef.current = 0
@@ -283,7 +305,7 @@ export function PlayPage() {
     setTutorialStage('idle')
     setTutorialStepIndex(0)
     setTutorialMatchProgress(0)
-  }, [looper, stopCamera])
+  }, [looper, releaseMidi, stopCamera])
 
   useEffect(() => {
     volumeRef.current = volume
@@ -301,6 +323,34 @@ export function PlayPage() {
 
   useEffect(() => () => synthRef.current.dispose(), [])
 
+  useEffect(() => {
+    if (midi.status !== 'ready' || !activeChord) return
+    updateMidiControllers(expressionRef.current, brightnessRef.current)
+    playMidiChord(activeChord)
+  }, [activeChord, midi.channel, midi.outputId, midi.status, playMidiChord, updateMidiControllers])
+
+  const toggleLocalMonitor = useCallback(async () => {
+    const nextMonitor = !localMonitorRef.current
+    localMonitorRef.current = nextMonitor
+    setLocalMonitor(nextMonitor)
+    window.localStorage.setItem(LOCAL_MONITOR_STORAGE_KEY, nextMonitor ? 'on' : 'off')
+    if (!nextMonitor) {
+      synthRef.current.release()
+      return
+    }
+    if (!sessionStarted) return
+    setAudioError(null)
+    try {
+      await synthRef.current.start()
+      synthRef.current.setPreset(soundPreset)
+      synthRef.current.setVolume(volumeRef.current * expressionRef.current)
+      synthRef.current.setBrightness(brightnessRef.current)
+      if (activeChord) synthRef.current.play(activeChord)
+    } catch {
+      setAudioError('Audio monitor could not start. Check this site’s sound permissions.')
+    }
+  }, [activeChord, sessionStarted, soundPreset])
+
   const startLiveTutorial = useCallback(() => {
     if (looperIsCapturing(looper.mode)) looper.cancelRecording()
     if (looper.mode === 'playing') looper.stopPlayback()
@@ -315,9 +365,10 @@ export function PlayPage() {
     stabilizerRef.current.reset()
     activeKeyRef.current = null
     synthRef.current.release()
+    releaseMidi()
     setActiveGesture(null)
     setActiveChord(null)
-  }, [looper])
+  }, [looper, releaseMidi])
 
   const exitLiveTutorial = useCallback(() => {
     tutorialRequestedRef.current = false
@@ -344,9 +395,10 @@ export function PlayPage() {
     stabilizerRef.current.reset()
     activeKeyRef.current = null
     synthRef.current.release()
+    releaseMidi()
     setActiveGesture(null)
     setActiveChord(null)
-  }, [looper])
+  }, [looper, releaseMidi])
 
   const cancelCalibration = useCallback(() => {
     calibrationDismissedRef.current = true
@@ -725,6 +777,22 @@ export function PlayPage() {
         ))}
         <p><b>↕</b> Height = volume<br /><b>↻</b> Tilt = brightness</p>
       </section>
+
+      <MidiPanel
+        supported={midi.supported}
+        status={midi.status}
+        outputs={midi.outputs}
+        outputId={midi.outputId}
+        channel={midi.channel}
+        activeNoteCount={midi.activeNoteCount}
+        error={midi.error}
+        localMonitor={localMonitor}
+        onConnect={() => void midi.connect()}
+        onOutputChange={(outputId) => void midi.selectOutput(outputId)}
+        onChannelChange={midi.setChannel}
+        onLocalMonitorChange={() => void toggleLocalMonitor()}
+        onPanic={midi.panic}
+      />
 
       <LooperPanel
         loop={looper.loop}

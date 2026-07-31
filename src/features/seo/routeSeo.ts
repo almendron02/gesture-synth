@@ -28,8 +28,8 @@ const staticPages: Record<string, RouteSeoMetadata> = {
     breadcrumbs: [],
   },
   '/play': {
-    title: 'Online Hand Gesture Synth | Gesture Synth',
-    description: 'Open a free webcam-controlled synth. Choose chords with your left hand and shape voicing, octave, volume, and brightness with your right.',
+    title: 'Hand Gesture MIDI Controller | Gesture Synth',
+    description: 'Play a webcam-controlled synth or send live gesture chords, expression, and brightness through Web MIDI to a DAW or external instrument.',
     canonicalPath: '/play',
     pageName: 'Gesture Synth Studio',
     schemaType: 'WebPage',
@@ -144,6 +144,7 @@ export function buildStructuredData(metadata: RouteSeoMetadata): object {
       applicationCategory: 'MultimediaApplication',
       operatingSystem: 'Any',
       browserRequirements: 'Requires JavaScript, WebRTC, Web Audio, and camera access',
+      featureList: ['Two-hand chord control', 'Web MIDI output', 'Gesture looper', 'Guided song practice'],
       isAccessibleForFree: true,
       offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
     },
