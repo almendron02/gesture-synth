@@ -27,6 +27,8 @@ import {
   type PerformanceGesture,
 } from '../features/gestures/gesture.types'
 import { useHandTracking } from '../features/hand-tracking/useHandTracking'
+import { LooperPanel } from '../features/looper/LooperPanel'
+import { useGestureLooper } from '../features/looper/useGestureLooper'
 import { buildChord, type Chord } from '../features/music/chords'
 import { SynthEngine } from '../features/synth/SynthEngine'
 import { soundPresetDefinitions, type SoundPreset } from '../features/synth/soundPresets'
@@ -122,6 +124,8 @@ export function PlayPage() {
     const saved = Number(stored)
     return Number.isFinite(saved) && saved >= 0 && saved <= 100 ? saved : 78
   })
+  const looper = useGestureLooper({ preset: soundPreset, volume })
+  const captureLoopChord = looper.captureChord
   const { status: cameraStatus, error: cameraError, start: startCamera, stop: stopCamera } = useCamera(videoRef)
 
   // Higher sensitivity means a smaller rotation is needed to leave the neutral zone.
@@ -193,21 +197,20 @@ export function PlayPage() {
     const nextKey = stable?.key ?? null
 
     const expression = rightHandExpression(nextFrame.right)
+    const brightness = rightHandBrightness(nextFrame.right)
     expressionRef.current = expression
     synthRef.current.setVolume(volumeRef.current * expression)
-    synthRef.current.setBrightness(rightHandBrightness(nextFrame.right))
+    synthRef.current.setBrightness(brightness)
+    const performanceChord = stable
+      ? buildChord(stable.left.degree, stable.left.quality, stable.right.voicing, stable.right.octaveShift)
+      : null
+    captureLoopChord(performanceChord, timestamp, expression, brightness)
 
     if (nextKey !== activeKeyRef.current) {
       activeKeyRef.current = nextKey
-      if (stable) {
-        const chord = buildChord(
-          stable.left.degree,
-          stable.left.quality,
-          stable.right.voicing,
-          stable.right.octaveShift,
-        )
-        synthRef.current.play(chord)
-        setActiveChord(chord)
+      if (stable && performanceChord) {
+        synthRef.current.play(performanceChord)
+        setActiveChord(performanceChord)
       } else {
         synthRef.current.release()
         setActiveChord(null)
@@ -220,7 +223,7 @@ export function PlayPage() {
       lastHandCountRef.current = nextFrame.handCount
       setFrame(nextFrame)
     }
-  }, [])
+  }, [captureLoopChord])
 
   const tracker = useHandTracking({
     videoRef,
@@ -250,6 +253,8 @@ export function PlayPage() {
   }, [beginSession])
 
   const endSession = useCallback(() => {
+    if (looper.mode === 'count-in' || looper.mode === 'recording') looper.cancelRecording()
+    if (looper.mode === 'playing') looper.stopPlayback()
     synthRef.current.release()
     stabilizerRef.current.reset()
     activeKeyRef.current = null
@@ -274,7 +279,7 @@ export function PlayPage() {
     setTutorialStage('idle')
     setTutorialStepIndex(0)
     setTutorialMatchProgress(0)
-  }, [stopCamera])
+  }, [looper, stopCamera])
 
   useEffect(() => {
     volumeRef.current = volume
@@ -293,6 +298,8 @@ export function PlayPage() {
   useEffect(() => () => synthRef.current.dispose(), [])
 
   const startLiveTutorial = useCallback(() => {
+    if (looper.mode === 'count-in' || looper.mode === 'recording') looper.cancelRecording()
+    if (looper.mode === 'playing') looper.stopPlayback()
     tutorialRequestedRef.current = false
     tutorialStageRef.current = 'active'
     tutorialStepIndexRef.current = 0
@@ -306,7 +313,7 @@ export function PlayPage() {
     synthRef.current.release()
     setActiveGesture(null)
     setActiveChord(null)
-  }, [])
+  }, [looper])
 
   const exitLiveTutorial = useCallback(() => {
     tutorialRequestedRef.current = false
@@ -317,6 +324,8 @@ export function PlayPage() {
   }, [])
 
   const startCalibration = useCallback(() => {
+    if (looper.mode === 'count-in' || looper.mode === 'recording') looper.cancelRecording()
+    if (looper.mode === 'playing') looper.stopPlayback()
     calibrationDismissedRef.current = false
     calibrationStageRef.current = 'left-neutral'
     calibrationFramesRef.current = []
@@ -333,7 +342,7 @@ export function PlayPage() {
     synthRef.current.release()
     setActiveGesture(null)
     setActiveChord(null)
-  }, [])
+  }, [looper])
 
   const cancelCalibration = useCallback(() => {
     calibrationDismissedRef.current = true
@@ -531,6 +540,20 @@ export function PlayPage() {
                 <span>{activeChord.name}</span>
               </div>
             )}
+            {sessionStarted && calibrationStage === 'idle' && tutorialStage === 'idle'
+              && (looper.mode === 'count-in' || looper.mode === 'recording') && (
+                <div className={`camera-loop-transport ${looper.mode}`} aria-live="polite">
+                  {looper.mode === 'count-in' ? (
+                    <><small>Recording starts in</small><strong>{looper.countInBeat}</strong><span>Raise both hands</span></>
+                  ) : (
+                    <>
+                      <div><small><i /> Recording</small><strong>{looper.bars} bars · {looper.bpm} BPM</strong></div>
+                      <span>{activeChord ? activeChord.name : 'Waiting for a complete chord'}</span>
+                      <b><i style={{ width: `${looper.transportProgress * 100}%` }} /></b>
+                    </>
+                  )}
+                </div>
+              )}
             {sessionStarted && calibrationStage !== 'idle' && !error && (
               <div className="calibration-overlay" role="dialog" aria-modal="true" aria-labelledby="calibration-title">
                 <div className="calibration-progress" aria-label={`Calibration step ${calibrationStage === 'complete' ? 4 : calibrationStepNumber} of 4`}>
@@ -698,6 +721,32 @@ export function PlayPage() {
         ))}
         <p><b>↕</b> Height = volume<br /><b>↻</b> Tilt = brightness</p>
       </section>
+
+      <LooperPanel
+        loop={looper.loop}
+        mode={looper.mode}
+        bpm={looper.bpm}
+        bars={looper.bars}
+        quantization={looper.quantization}
+        countInBeat={looper.countInBeat}
+        transportProgress={looper.transportProgress}
+        activeChord={activeChord}
+        audioError={looper.audioError}
+        canRecord={sessionStarted && tracker.status === 'ready' && calibrationStage === 'idle' && tutorialStage === 'idle'}
+        onBpmChange={looper.setBpm}
+        onBarsChange={looper.setBars}
+        onQuantizationChange={looper.setQuantization}
+        onRecord={() => {
+          document.querySelector('.camera-stage')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+          void looper.startRecording()
+        }}
+        onCancelRecording={looper.cancelRecording}
+        onPlay={() => void looper.startPlayback()}
+        onStopPlayback={looper.stopPlayback}
+        onClear={() => {
+          if (window.confirm('Clear the saved performance loop? This take cannot be recovered.')) looper.clearLoop()
+        }}
+      />
     </div>
   )
 }
