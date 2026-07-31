@@ -29,6 +29,14 @@ describe('route SEO metadata', () => {
     expect(JSON.stringify(buildStructuredData(metadata))).toContain('Recording and MIDI guide')
   })
 
+  it('describes the piano-roll composer', () => {
+    const metadata = getRouteSeo('/compose')
+
+    expect(metadata.title).toContain('Gesture Composer')
+    expect(metadata.description).toContain('laptop-keyboard')
+    expect(metadata.robots).toContain('index')
+  })
+
   it('builds unique metadata for a guided song', () => {
     const metadata = getRouteSeo('/songs/amazing-grace')
 
